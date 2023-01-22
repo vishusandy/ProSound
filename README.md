@@ -1,4 +1,4 @@
-## ProSound
+# ProSound
 
 A Sourcemod plugin to play sound clips without users having to download the sounds when joining the server.
 
@@ -15,9 +15,7 @@ A Sourcemod plugin to play sound clips without users having to download the soun
 
 ## Installing
 
-1. Upload the .smx file
-
-2. Add the following to your `/cstrike/addons/sourcemod/configs/databases.cfg`
+1. Add the following to your `/cstrike/addons/sourcemod/configs/databases.cfg`
 
     ```
         "pro_sounds"
@@ -30,7 +28,7 @@ A Sourcemod plugin to play sound clips without users having to download the soun
         }
     ```
 
-3. Create the sounds table by executing the following in a MySQL database:
+2. Create the sounds table by executing the following in a MySQL database:
 
     ```
     CREATE TABLE `pro_sounds` (
@@ -53,6 +51,8 @@ A Sourcemod plugin to play sound clips without users having to download the soun
     MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
     COMMIT;
     ```
+
+3. Upload the .smx file
 
 ## Configuration
 
