@@ -3,15 +3,14 @@
 #endif
 #define _pro_sound_included
 
-public SharedPlugin __pl_pro_sound = 
-{
+public SharedPlugin __pl_pro_sound = {
     name = "pro_sound",
     file = "ProSound.smx",
-#if defined REQUIRE_PLUGIN
-    required = 1,
-#else
-    required = 0,
-#endif
+    #if defined REQUIRE_PLUGIN
+        required = 1,
+    #else
+        required = 0,
+    #endif
 };
 
 #if !defined REQUIRE_PLUGIN
@@ -22,26 +21,6 @@ public void __pl_pro_sound_SetNTVOptional() {
     MarkNativeAsOptional("ProSound_ShowSoundMenu");
 }
 #endif
-
-
-enum struct SoundKV {
-    // unique sound id from the database
-    int id;
-    // command name (without ! or /)
-    char command[32];
-    // path to sound file
-    char sound[256];
-    // if ProXP is enabled this field is used to indicate minimum required level to play this sound (otherwise this field is ignored)
-    int xplvl;
-    // if KIC plugin is enabled and active this field is used to indicate whether this sound can be played (otherwise this field is ignored)
-    int kic;
-    // volume field is no longer used
-    float volume;
-    // the cost field is reserved for future use, but not currently used
-    int cost;
-    // annoyingness factor - used for rate limiting to prevent over-spamming annoying sounds
-    int rate_points;
-}
 
 
 

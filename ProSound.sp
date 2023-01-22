@@ -8,33 +8,95 @@
 
 public Plugin myinfo = { name = "Pro Sounds", author = "Vishus", description = "Custom sounds - without needing to download on server join, and with rate limiting.", version = "0.1.0", url = "" };
 
-// Minimum time between playing each sound
-#define RATE_LIMIT 3.0
-#define MAX_SOUNDS_PER_INTERVAL 10
-#define MAX_POINTS_PER_INTERVAL 10
-#define SOUND_INTERVAL 60.0
 
-// seems to look best to me
+/* CVARS
+
+pro_sound_url
+    Base url for sounds.  Leave blank to specify full url in database entries, otherwise sound file will be appened to this url (make sure to include a / at the end!)
+    default: ""
+
+pro_sound_rate_limiting_enabled
+    default: "1"
+
+pro_sound_rate_limit
+    Minimum number of seconds between playing one sound and when another sound can be played
+    default: "3.0"
+
+pro_sound_max_sounds_per_interval
+    Maximum number of sounds that can be played during an interval
+    default: "10"
+
+pro_sound_max_points_per_interval
+    Maximum number of points (annoyingness factor) that can be played during an interval
+    default: "10"
+
+pro_sound_sound_interval
+    Length of of interval in seconds
+    default: "60"
+
+ */
+
+
+
+// used to output a list of sounds to chat - seems to look best to me
 #define MAX_LINE_LEN 106
 
-bool rate_limiting_enabled = true;
-bool can_play_sounds = true;
 
+enum struct SoundKV {
+    // unique sound id from the database
+    int id;
+    // command name (without ! or /)
+    char command[32];
+    // path to sound file
+    char sound[256];
+    // if ProXP is enabled this field is used to indicate minimum required level to play this sound (otherwise this field is ignored)
+    int xplvl;
+    // if KIC plugin is enabled and active this field is used to indicate whether this sound can be played (otherwise this field is ignored)
+    int kic;
+    // volume field is no longer used
+    float volume;
+    // the cost field is reserved for future use, but not currently used
+    int cost;
+    // annoyingness factor - used for rate limiting to prevent over-spamming annoying sounds
+    int rate_points;
+}
+
+ConVar cv_rate_limit;
+ConVar cv_max_sounds_per_interval;
+ConVar cv_max_points_per_interval;
+ConVar cv_sound_interval;
 ConVar cv_rate_limiting;
 ConVar cv_sound_url;
-char sound_url_fmt[256];
-
-ArrayList sounds;
-ArrayList soundsnewest;
-StringMap sound_cmds;
-ArrayList sound_list;
-Database SoundDB;
 ConVar cv_kic;
 
+ArrayList sounds; // all of the available sounds
+ArrayList soundsnewest; // sounds sorted by newest first
+ArrayList sound_list; // a list of the sound command names - used for the !soundlist command
+StringMap sound_cmds; // maps a sound command name to an index in the sounds array
 
+Database SoundDB;
+
+
+// used internally to determine whether sounds can be played or if rate limiting is in effect
+bool can_play_sounds = true;
+
+// variables used to track rate limiting
 int sounds_played = 0;
 int sound_points = 0;
+
+// format string for the sound url
+char sound_url_fmt[256];
+
+// whether ProXP is installed and currently loaded
 bool pro_xp = false;
+
+/* CVAR CACHING */
+bool rate_limiting_enabled = true;  // pro_sound_rate_limiting
+float rate_limit;                   // pro_sound_rate_limit
+int max_sounds_per_interval;        // pro_sound_max_sounds_per_interval
+int max_points_per_interval;        // pro_sound_max_points_per_interval
+float sound_interval;               // pro_sound_sound_interval
+
 
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -47,7 +109,6 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 }
 
 
-
 public void OnPluginStart() {
     Database.Connect(DbConnCallback, "pro_sounds");
     
@@ -55,16 +116,32 @@ public void OnPluginStart() {
     sound_cmds = new StringMap();
     sound_list = new ArrayList(32);
     
-    cv_rate_limiting = CreateConVar("sm_sound_rate_limiting", "1");
-    rate_limiting_enabled = GetConVarBool(cv_rate_limiting);
-    HookConVarChange(cv_rate_limiting, CvarRateLimitingChange);
     
     cv_sound_url = CreateConVar("pro_sound_url", "", "Base url for sounds.  Leave blank to specify full url in database entries, otherwise sound file will be appened to this url (make sure to include a / at the end!)");
+    cv_rate_limiting = CreateConVar("pro_sound_rate_limiting_enabled", "1");
+    cv_rate_limit = CreateConVar("pro_sound_rate_limit", "3.0", "Minimum number of seconds between playing one sound and when another sound can be played");
+    cv_max_sounds_per_interval = CreateConVar("pro_sound_max_sounds_per_interval", "10", "Maximum number of sounds that can be played during an interval");
+    cv_max_points_per_interval = CreateConVar("pro_sound_max_points_per_interval", "10", "Maximum number of points (annoyingness factor) that can be played during an interval");
+    cv_sound_interval = CreateConVar("pro_sound_sound_interval", "60", "Length of of interval in seconds");
+    
+    rate_limiting_enabled = GetConVarBool(cv_rate_limiting);
+    rate_limit = GetConVarFloat(cv_rate_limit);
+    max_sounds_per_interval = GetConVarInt(cv_max_sounds_per_interval);
+    max_points_per_interval = GetConVarInt(cv_max_points_per_interval);
+    sound_interval = GetConVarFloat(cv_sound_interval);
     GetConVarString(cv_sound_url, sound_url_fmt, sizeof(sound_url_fmt));
     Format(sound_url_fmt, sizeof(sound_url_fmt), "%s%%s", sound_url_fmt);
-    HookConVarChange(cv_sound_url, CvarUrlChange);
+    
+    HookConVarChange(cv_rate_limiting, CvarChangedRateLimitEnabled);
+    HookConVarChange(cv_rate_limit, CvarChangedRateLimit);
+    HookConVarChange(cv_max_sounds_per_interval, CvarChangedMaxSoundsPerInterval);
+    HookConVarChange(cv_max_points_per_interval, CvarChangedMaxPointsPerInterval);
+    HookConVarChange(cv_sound_interval, CvarChangedSoundInterval);
+    HookConVarChange(cv_sound_url, CvarChangedUrl);
+    
     
     cv_kic = FindConVar("keep_it_clean");
+    // if another plugin defines this use that, otherwise create a new convar
     if(!cv_kic) {
         cv_kic = CreateConVar("keep_it_clean", "0", "Whether Keep It Clean rules are in effect.  0=off 1=on");
     }
@@ -79,21 +156,65 @@ public void OnPluginStart() {
     RegAdminCmd("reloadsounds", Command_ReloadSounds, ADMFLAG_BAN, "Reload sounds from database");
     
 }
+
+
 public void OnAllPluginsLoaded() {
     pro_xp = LibraryExists("pro_xp");
 }
+
 
 public void OnLibraryRemoved(const char[] name) {
     if (StrEqual(name, "pro_xp")) {
         pro_xp = false;
     }
 }
- 
+
+
 public void OnLibraryAdded(const char[] name) {
     if (StrEqual(name, "pro_xp")) {
         pro_xp = true;
     }
 }
+
+
+public void CvarChangedRateLimit(ConVar convar, const char[] oldValue, const char[] newValue) {
+    rate_limit = GetConVarFloat(cv_rate_limit);
+}
+
+
+public void CvarChangedMaxSoundsPerInterval(ConVar convar, const char[] oldValue, const char[] newValue) {
+    max_sounds_per_interval = GetConVarInt(cv_max_sounds_per_interval);
+}
+
+
+public void CvarChangedMaxPointsPerInterval(ConVar convar, const char[] oldValue, const char[] newValue) {
+    max_points_per_interval = GetConVarInt(cv_max_points_per_interval);
+}
+
+
+public void CvarChangedSoundInterval(ConVar convar, const char[] oldValue, const char[] newValue) {
+    sound_interval = GetConVarFloat(cv_sound_interval);
+}
+
+
+public void CvarChangedRateLimitEnabled(ConVar convar, const char[] oldValue, const char[] newValue) {
+    if(StrEqual(newValue, "0")) {
+        ResetRateLimits();
+        rate_limiting_enabled = false;
+    } else if(StrEqual(newValue, "1")) {
+        rate_limiting_enabled = true;
+    }
+}
+
+
+public void CvarChangedUrl(ConVar convar, const char[] oldValue, const char[] newValue) {
+    int len = strlen(newValue);
+    if(len > 0 && newValue[len-1] != '\0') {
+        // sound_url is a format string so append an additional %s at the end for the placement of the sound name
+        FormatEx(sound_url_fmt, sizeof(sound_url_fmt), "%s%%s", newValue);
+    }
+}
+
 
 public Action Command_ReloadSounds(int client, int args) {
     LoadSounds(true);
@@ -101,14 +222,17 @@ public Action Command_ReloadSounds(int client, int args) {
     return Plugin_Continue;
 }
 
+
 public void DbConnCallback(Database db, const char[] error, any data) {
     if(strlen(error) > 0 || db == null) {
         LogAction(-1, -1, "DbConnCallback: could not connect to sound database: %s", error);
+        SetFailState("Could not connect to database");
         return;
     }
     SoundDB = db;
     LoadSounds(true);
 }
+
 
 public OnMapStart() {
     if(SoundDB != null) {
@@ -118,11 +242,11 @@ public OnMapStart() {
 }
 
 
-
 public void LoadSounds(bool register_commands) {
     char query[] = "SELECT id, cmd, path, xp, kic, volume, cost, rate_points FROM pro_sounds WHERE enabled = 1 ORDER BY path";
     SoundDB.Query(CallbackLoadSounds, query, register_commands);
 }
+
 
 public void CallbackLoadSounds(Database db, DBResultSet result, const char[] error, bool register_commands) {
     if(result == null) {
@@ -153,7 +277,7 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
         sound_cmds.SetValue(cur_sound.command, sounds.Length-1);
         sound_list.PushString(cur_sound.command);
         
-        // if register_commands is true use CommandExists() to only register new console commands
+        // if register_commands is true register a command for each sound - only registers the command if the command does not already exist
         if(register_commands) {
             Format(cmd, sizeof(cmd), "sm_%s", cur_sound.command);
             if(!CommandExists(cmd))
@@ -169,21 +293,7 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
 }
 
 
-
-
-// This is the console command that is registered with each of the sound commands in SoundCmds.
-// It works by getting argument 0 (the command name) and sending that (minus the sm_ prefix) to the PlaySoundCommand function
-public Action SoundCommand(int client, int args) {
-    char cmd[32];
-    GetCmdArg(0, cmd, sizeof(cmd));
-    PlaySound(client, cmd[3]);
-    return Plugin_Continue;
-}
-
-
-
-
-// this is the main sound funciton to call.  returns false if you rate limiting prevents it from playing
+// this is the main sound funciton to call.  returns false if rate limiting prevented the sound from playing
 bool PlaySound(int client, const char[] sound_cmd) {
     int index = -1;
     if(sound_cmds.GetValue(sound_cmd, index)) {
@@ -192,7 +302,6 @@ bool PlaySound(int client, const char[] sound_cmd) {
                 int player_lvl;
                 if(pro_xp) player_lvl = ProXP_GetPlayerLevel(client);
                 if((rate_limiting_enabled && !CanPlaySound(cur_sound.rate_points)) || (pro_xp && cur_sound.xplvl > player_lvl)) {
-                    // LogAction(-1, -1, "Sound blocked due to rate limiting\ncan_play_sounds=%i sounds_played=%i sound_points=%i", can_play_sounds, sounds_played, sound_points);
                     SoundPlayFailReply(client, cur_sound.rate_points, cur_sound.xplvl);
                     return false;
                 }
@@ -224,10 +333,10 @@ bool PlaySound(int client, const char[] sound_cmd) {
 }
 
 
-
 bool CanPlaySound(int rate_points) {
-    return !rate_limiting_enabled || can_play_sounds && sound_points + rate_points <= MAX_POINTS_PER_INTERVAL;
+    return !rate_limiting_enabled || can_play_sounds && sound_points + rate_points <= max_points_per_interval;
 }
+
 
 void ResetRateLimits() {
     can_play_sounds = true;
@@ -235,36 +344,21 @@ void ResetRateLimits() {
     sound_points = 0;
 }
 
-public void CvarRateLimitingChange(ConVar convar, const char[] oldValue, const char[] newValue) {
-    if(StrEqual(newValue, oldValue)) {
-       return; 
-    } else if(StrEqual(newValue, "0")) {
-        ResetRateLimits();
-        rate_limiting_enabled = false;
-    } else if(StrEqual(newValue, "1")) {
-        rate_limiting_enabled = true;
-    }
-}
-public void CvarUrlChange(ConVar convar, const char[] oldValue, const char[] newValue) {
-    int len = strlen(newValue);
-    if(len > 0 && newValue[len-1] != '\0') {
-        // sound_url is a format string so append an additional %s at the end for the placement of the sound name
-        FormatEx(sound_url_fmt, sizeof(sound_url_fmt), "%s%%s", newValue);
-    }
-}
 
 void IncRateLimit(int rate_points) {
-    CreateTimer(RATE_LIMIT, TimerSingleRateLimit, INVALID_HANDLE, TIMER_FLAG_NO_MAPCHANGE);
-    CreateTimer(SOUND_INTERVAL, TimerIntervalRateLimit, rate_points, TIMER_FLAG_NO_MAPCHANGE);
+    CreateTimer(rate_limit, TimerSingleRateLimit, INVALID_HANDLE, TIMER_FLAG_NO_MAPCHANGE);
+    CreateTimer(sound_interval, TimerIntervalRateLimit, rate_points, TIMER_FLAG_NO_MAPCHANGE);
     sounds_played += 1;
     sound_points += rate_points;
     can_play_sounds = false;
 }
 
+
 public Action TimerSingleRateLimit(Handle timer) {
     CheckRateLimit();
     return Plugin_Continue;
 }
+
 
 public Action TimerIntervalRateLimit(Handle timer, int rate_points) {
     sounds_played -= 1;
@@ -273,8 +367,9 @@ public Action TimerIntervalRateLimit(Handle timer, int rate_points) {
     return Plugin_Continue;
 }
 
+
 void CheckRateLimit() {
-    if(sounds_played < MAX_SOUNDS_PER_INTERVAL) {
+    if(sounds_played < max_sounds_per_interval) {
         can_play_sounds = true;
     }
 }
@@ -285,15 +380,14 @@ public void SoundPlayFailReply(int client, int rate_points, int level_required) 
     if(pro_xp) player_level = ProXP_GetPlayerLevel(client);
     if(pro_xp && level_required > player_level) {
         ReplyToCommand(client, "You need to be level %i to play this sound", level_required);
-    } else if(sounds_played == MAX_SOUNDS_PER_INTERVAL) {
-        ReplyToCommand(client, "Only %i sounds can be played every %.1f seconds", MAX_SOUNDS_PER_INTERVAL, SOUND_INTERVAL);
-    } else if(sound_points + rate_points > MAX_POINTS_PER_INTERVAL) {
+    } else if(sounds_played == max_sounds_per_interval) {
+        ReplyToCommand(client, "Only %i sounds can be played every %.1f seconds", max_sounds_per_interval, sound_interval);
+    } else if(sound_points + rate_points > max_points_per_interval) {
         ReplyToCommand(client, "Too many loud or \"annoying\" sounds have been played; try again later.  Or don't.");
     } else {
-        ReplyToCommand(client, "Sounds can only be played every %.1f seconds", RATE_LIMIT); // sound command was registered in a console command but not found in the SoundCmds hashmap
+        ReplyToCommand(client, "Sounds can only be played every %.1f seconds", rate_limit); // sound command was registered in a console command but not found in the SoundCmds hashmap
     }
 }
-
 
 
 public Action Command_ListSounds(client, args) {
@@ -301,10 +395,12 @@ public Action Command_ListSounds(client, args) {
     return Plugin_Continue;
 }
 
+
 public Action Command_SoundsMenu(client, args) {
     CreateTimer(0.1, TimerSoundsMenu, client);
     return Plugin_Continue;
 }
+
 
 public Action Command_NewSoundsMenu(client, args) {
     CreateTimer(0.1, TimerSoundsMenuNewest, client);
@@ -317,10 +413,22 @@ public Action Command_Say(client, args) {
     return ProcessSay(client);
 }
 
+
 // allow users to type in sounds and get a list of available sound commands
 public Action Command_TeamSay(client, args) {
     return ProcessSay(client);
 }
+
+
+// This is the console command that is registered with each of the sound commands in SoundCmds.
+// It works by getting argument 0 (the command name) and sending that (minus the sm_ prefix) to the PlaySoundCommand function
+public Action SoundCommand(int client, int args) {
+    char cmd[32];
+    GetCmdArg(0, cmd, sizeof(cmd));
+    PlaySound(client, cmd[3]);
+    return Plugin_Continue;
+}
+
 
 public Action ProcessSay(int client) {
     if (client == 0 || IsFakeClient(client)) {
@@ -344,11 +452,13 @@ public Action ProcessSay(int client) {
     }
 }
 
+
 // show available sounds in chat to all players
 public Action TimerListSoundsPublic(Handle timer, int client) {
     ListSounds(client, true);
     return Plugin_Continue;
 }
+
 
 // show available sounds in chat only to the specified client
 public Action TimerListSoundsPrivate(Handle timer, int client) {
@@ -356,11 +466,13 @@ public Action TimerListSoundsPrivate(Handle timer, int client) {
     return Plugin_Continue;
 }
 
+
 // show sounds menu by newest
 public Action TimerSoundsMenuNewest(Handle timer, int client) {
     SoundMenu(client, true);
     return Plugin_Continue;
 }
+
 
 // show sounds menu
 public Action TimerSoundsMenu(Handle timer, int client) {
@@ -370,13 +482,7 @@ public Action TimerSoundsMenu(Handle timer, int client) {
 
 
 
-/**
- * Send a list of all sound commands to chat
- * 
- * @param client     Client
- * @param show       True will send to public chat
- * @return
- */
+// Send a list of all sound commands to chat
 void ListSounds(int client, bool show) {
     char buffer[MAX_LINE_LEN+4];
     char command[32];
@@ -409,6 +515,77 @@ void ListSounds(int client, bool show) {
         PrintToChat(client, "%s", buffer);
     }
 }
+
+
+public void SoundMenu(int client, bool newest) {
+    ArrayList s = (newest)? soundsnewest: sounds;
+    
+    Menu menu = (newest)? new Menu(SoundMenu_CallbackNewest): new Menu(SoundMenu_Callback);
+    menu.SetTitle((newest)? "Sounds - Newest": "Sounds");
+    
+    char entry[64];
+    char value[16];
+    SoundKV sound;
+    
+    for(int i=0; i < s.Length; i++) {
+        s.GetArray(i, sound);
+        FormatEx(value, sizeof(value), "%i", i);
+        if(pro_xp)
+            FormatEx(entry, sizeof(entry), "%s (lvl %i", sound.command, sound.xplvl);
+        else
+            FormatEx(entry, sizeof(entry), "%s ", sound.command);
+        
+        if(pro_xp && ProXP_GetPlayerLevel(client) < sound.xplvl) {
+            menu.AddItem(value, entry, ITEMDRAW_DISABLED);
+        } else {
+            menu.AddItem(value, entry);
+        }
+        
+        menu.ExitButton = true;
+        menu.Display(client, MENU_TIME_FOREVER);
+    }
+}
+
+
+public int SoundMenu_Callback(Menu menu, MenuAction action, int client, int param2) {
+    char item[64];
+    menu.GetItem(param2, item, sizeof(item));
+    
+    if(action == MenuAction_Select) {
+        SoundKV sound;
+        int index = StringToInt(item);
+        sounds.GetArray(index, sound);
+        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic == 1) {
+            ReplyToCommand(client, "That sound cannot be used when KIC is active.");
+        } else if(PlaySound(client, sound.command)) {
+            PrintToChatAll("%N played !%s", client, sound.command);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
+public int SoundMenu_CallbackNewest(Menu menu, MenuAction action, int client, int param2) {
+    char item[64];
+    menu.GetItem(param2, item, sizeof(item));
+    
+    if(action == MenuAction_Select) {
+        SoundKV sound;
+        int index = StringToInt(item);
+        soundsnewest.GetArray(index, sound);
+        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic == 1) {
+            ReplyToCommand(client, "That sound cannot be used when KIC is active.");
+        } else if(PlaySound(client, sound.command)) {
+            PrintToChatAll("%N played !%s", client, sound.command);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
+
 
 
 
@@ -485,70 +662,3 @@ public int Native_CheckSoundRateLimit(Handle plugin, int numParams) {
     return !rate_limiting_enabled || CanPlaySound(cur_sound.rate_points);
 }
 
-
-public void SoundMenu(int client, bool newest) {
-    ArrayList s = (newest)? soundsnewest: sounds;
-    
-    Menu menu = (newest)? new Menu(SoundMenu_CallbackNewest): new Menu(SoundMenu_Callback);
-    menu.SetTitle((newest)? "Sounds - Newest": "Sounds");
-    
-    char entry[64];
-    char value[16];
-    SoundKV sound;
-    
-    for(int i=0; i < s.Length; i++) {
-        s.GetArray(i, sound);
-        FormatEx(value, sizeof(value), "%i", i);
-        if(pro_xp)
-            FormatEx(entry, sizeof(entry), "%s (lvl %i", sound.command, sound.xplvl);
-        else
-            FormatEx(entry, sizeof(entry), "%s ", sound.command);
-        
-        if(pro_xp && ProXP_GetPlayerLevel(client) < sound.xplvl) {
-            menu.AddItem(value, entry, ITEMDRAW_DISABLED);
-        } else {
-            menu.AddItem(value, entry);
-        }
-        
-        menu.ExitButton = true;
-        menu.Display(client, MENU_TIME_FOREVER);
-    }
-}
-
-
-public int SoundMenu_Callback(Menu menu, MenuAction action, int client, int param2) {
-    char item[64];
-    menu.GetItem(param2, item, sizeof(item));
-    
-    if(action == MenuAction_Select) {
-        SoundKV sound;
-        int index = StringToInt(item);
-        sounds.GetArray(index, sound);
-        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic == 1) {
-            ReplyToCommand(client, "That sound cannot be used when KIC is active.");
-        } else if(PlaySound(client, sound.command)) {
-            PrintToChatAll("%N played !%s", client, sound.command);
-            return 0;
-        }
-    }
-    return 1;
-}
-
-
-public int SoundMenu_CallbackNewest(Menu menu, MenuAction action, int client, int param2) {
-    char item[64];
-    menu.GetItem(param2, item, sizeof(item));
-    
-    if(action == MenuAction_Select) {
-        SoundKV sound;
-        int index = StringToInt(item);
-        soundsnewest.GetArray(index, sound);
-        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic == 1) {
-            ReplyToCommand(client, "That sound cannot be used when KIC is active.");
-        } else if(PlaySound(client, sound.command)) {
-            PrintToChatAll("%N played !%s", client, sound.command);
-            return 0;
-        }
-    }
-    return 1;
-}
