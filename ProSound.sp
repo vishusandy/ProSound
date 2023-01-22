@@ -293,40 +293,41 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
 // this is the main sound funciton to call.  returns false if rate limiting prevented the sound from playing
 bool PlaySound(int client, const char[] sound_cmd) {
     int index = -1;
-    if(sound_cmds.GetValue(sound_cmd, index)) {
-            SoundKV cur_sound;
-            if(index != -1 && index < sounds.Length && sounds.GetArray(index, cur_sound)) {
-                int player_lvl;
-                if(pro_xp) player_lvl = ProXP_GetPlayerLevel(client);
-                if((rate_limiting_enabled && !CanPlaySound(cur_sound.rate_points)) || (pro_xp && cur_sound.xplvl > player_lvl)) {
-                    SoundPlayFailReply(client, cur_sound.rate_points, cur_sound.xplvl);
-                    return false;
-                }
-
-                char arg1[128];
-                
-                new Handle:setup = CreateKeyValues("data");
-	
-                KvSetString(setup, "title", "Musicspam");
-                KvSetString(setup, "type", "2");
-                Format(arg1,sizeof(arg1), sound_url_fmt, cur_sound.sound);
-                KvSetString(setup, "msg", arg1);
-                
-                for (new i = 1; i <= MaxClients; i++)
-                {
-                    if (IsClientInGame(i) && !IsFakeClient(i))
-                    {
-                        ShowVGUIPanel(i, "info", setup, false); 
-                    }
-                }
-                
-                CloseHandle(setup);
-
-                IncRateLimit(cur_sound.rate_points);
-                return true;
-            }
+    if(!sound_cmds.GetValue(sound_cmd, index)) {
+        return false;
     }
-    return false;
+    
+    SoundKV cur_sound;
+    
+    if(index == -1 || index >= sounds.Length || !sounds.GetArray(index, cur_sound) || (cv_kic && GetConVarInt(cv_kic) == 1 && cur_sound.kic != 0)) {
+        return false;
+    }
+
+    int player_lvl;
+    if(pro_xp) player_lvl = ProXP_GetPlayerLevel(client);
+    if((rate_limiting_enabled && !CanPlaySound(cur_sound.rate_points)) || (pro_xp && cur_sound.xplvl > player_lvl)) {
+        SoundPlayFailReply(client, cur_sound.rate_points, cur_sound.xplvl);
+        return false;
+    }
+
+    char arg1[128];
+    Handle setup = CreateKeyValues("data");
+
+    KvSetString(setup, "title", "Musicspam");
+    KvSetString(setup, "type", "2");
+    Format(arg1,sizeof(arg1), sound_url_fmt, cur_sound.sound);
+    KvSetString(setup, "msg", arg1);
+    
+    for (int i = 1; i <= MaxClients; i++) {
+        if (IsClientInGame(i) && !IsFakeClient(i)) {
+            ShowVGUIPanel(i, "info", setup, false); 
+        }
+    }
+    
+    CloseHandle(setup);
+
+    IncRateLimit(cur_sound.rate_points);
+    return true;
 }
 
 
@@ -552,7 +553,7 @@ public int SoundMenu_Callback(Menu menu, MenuAction action, int client, int para
         SoundKV sound;
         int index = StringToInt(item);
         sounds.GetArray(index, sound);
-        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic == 1) {
+        if(cv_kic && GetConVarInt(cv_kic) == 1 && sound.kic != 0) {
             ReplyToCommand(client, "That sound cannot be used when KIC is active.");
         } else if(PlaySound(client, sound.command)) {
             PrintToChatAll("%N played !%s", client, sound.command);
@@ -585,30 +586,6 @@ public int SoundMenu_CallbackNewest(Menu menu, MenuAction action, int client, in
 
 
 
-
-
-public int Native_SoundList(Handle plugin, int numParams) {
-    Handle new_handle = CloneHandle(sounds, plugin);
-    return view_as<int>(new_handle);
-}
-
-public int Native_SoundListByNewest(Handle plugin, int numParams) {
-    Handle new_handle = CloneHandle(soundsnewest, plugin);
-    return view_as<int>(new_handle);
-}
-
-int SortNewest(int index1, int index2, Handle array, Handle hndl) {
-    SoundKV a;
-    SoundKV b;
-    
-    GetArrayArray(array, index1, a, sizeof(a));
-    GetArrayArray(array, index2, b, sizeof(b));
-    
-    return b.id - a.id;
-    
-}
-
-
 public int Native_HasSound(Handle plugin, int numParams) {
     int len;
     GetNativeStringLength(1, len);
@@ -618,6 +595,7 @@ public int Native_HasSound(Handle plugin, int numParams) {
     char buff[2];
     return sound_cmds.GetString(cmd, buff, sizeof(buff));
 }
+
 
 public int Native_PlaySound(Handle plugin, int numParams) {
     int client = GetNativeCell(1);
@@ -633,12 +611,14 @@ public int Native_PlaySound(Handle plugin, int numParams) {
     return false;
 }
 
+
 public int Native_ShowSoundMenu(Handle plugin, int numParams) {
     int client = GetNativeCell(1);
     bool newest = GetNativeCell(2);
     SoundMenu(client, newest);
     return 0;
 }
+
 
 public int Native_CheckSoundRateLimit(Handle plugin, int numParams) {
     int len;
@@ -659,3 +639,31 @@ public int Native_CheckSoundRateLimit(Handle plugin, int numParams) {
     return !rate_limiting_enabled || CanPlaySound(cur_sound.rate_points);
 }
 
+
+// NO LONGER USED - but kept for possible future use
+public int Native_SoundList(Handle plugin, int numParams) {
+    Handle new_handle = CloneHandle(sounds, plugin);
+    return view_as<int>(new_handle);
+}
+
+// NO LONGER USED - but kept for possible future use
+public int Native_SoundListByNewest(Handle plugin, int numParams) {
+    Handle new_handle = CloneHandle(soundsnewest, plugin);
+    return view_as<int>(new_handle);
+}
+
+
+
+
+
+
+
+int SortNewest(int index1, int index2, Handle array, Handle hndl) {
+    SoundKV a;
+    SoundKV b;
+    
+    GetArrayArray(array, index1, a, sizeof(a));
+    GetArrayArray(array, index2, b, sizeof(b));
+    
+    return b.id - a.id;
+}
