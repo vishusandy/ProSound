@@ -53,10 +53,6 @@ enum struct SoundKV {
     int xplvl;
     // if KIC plugin is enabled and active this field is used to indicate whether this sound can be played (otherwise this field is ignored)
     int kic;
-    // volume field is no longer used
-    float volume;
-    // the cost field is reserved for future use, but not currently used
-    int cost;
     // annoyingness factor - used for rate limiting to prevent over-spamming annoying sounds
     int rate_points;
     // whether to register the sound as a command
@@ -245,7 +241,7 @@ public OnMapStart() {
 
 
 public void LoadSounds(bool register_commands) {
-    char query[] = "SELECT id, cmd, path, xp, kic, volume, cost, rate_points, register_cmd FROM pro_sounds WHERE enabled = 1 ORDER BY path";
+    char query[] = "SELECT id, cmd, path, xp, kic, rate_points, register_cmd FROM pro_sounds WHERE enabled = 1 ORDER BY path";
     SoundDB.Query(CallbackLoadSounds, query, register_commands);
 }
 
@@ -266,10 +262,8 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
         result.FetchString(2, cur_sound.sound, 128);
         cur_sound.xplvl = result.FetchInt(3);
         cur_sound.kic = result.FetchInt(4);
-        cur_sound.volume = result.FetchFloat(5);
-        cur_sound.cost = result.FetchInt(6);
-        cur_sound.rate_points = result.FetchInt(7);
-        cur_sound.register_cmd = result.FetchInt(8) != 0;
+        cur_sound.rate_points = result.FetchInt(5);
+        cur_sound.register_cmd = result.FetchInt(6) != 0;
         
         if(!PrecacheSound(cur_sound.sound, true)) {
             LogAction(-1, -1, "Failed to prefetch sound %s: %s", cur_sound.command, cur_sound.sound);

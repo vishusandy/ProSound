@@ -37,8 +37,6 @@ A Sourcemod plugin to play sound clips without users having to download the soun
     `path` char(250) NOT NULL,
     `xp` int(11) DEFAULT '5',
     `kic` int(11) DEFAULT '0',
-    `volume` float DEFAULT '1',
-    `cost` int(11) DEFAULT '1',
     `rate_points` int(11) NOT NULL DEFAULT '1',
     `enabled` tinyint(1) NOT NULL DEFAULT '1',
     `register_cmd` tinyint(1) NOT NULL DEFAULT '1'
