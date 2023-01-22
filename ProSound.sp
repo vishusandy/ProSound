@@ -32,7 +32,7 @@ pro_sound_max_points_per_interval
 
 pro_sound_sound_interval
     Length of of interval in seconds
-    default: "60"
+    default: "60.0"
 
  */
 
@@ -124,7 +124,7 @@ public void OnPluginStart() {
     cv_rate_limit = CreateConVar("pro_sound_rate_limit", "3.0", "Minimum number of seconds between playing one sound and when another sound can be played");
     cv_max_sounds_per_interval = CreateConVar("pro_sound_max_sounds_per_interval", "10", "Maximum number of sounds that can be played during an interval");
     cv_max_points_per_interval = CreateConVar("pro_sound_max_points_per_interval", "10", "Maximum number of points (annoyingness factor) that can be played during an interval");
-    cv_sound_interval = CreateConVar("pro_sound_sound_interval", "60", "Length of of interval in seconds");
+    cv_sound_interval = CreateConVar("pro_sound_sound_interval", "60.0", "Length of of interval in seconds");
     
     rate_limiting_enabled = GetConVarBool(cv_rate_limiting);
     rate_limit = GetConVarFloat(cv_rate_limit);
