@@ -59,6 +59,8 @@ enum struct SoundKV {
     int cost;
     // annoyingness factor - used for rate limiting to prevent over-spamming annoying sounds
     int rate_points;
+    // whether to register the sound as a command
+    bool register_cmd;
 }
 
 ConVar cv_rate_limit;
@@ -243,7 +245,7 @@ public OnMapStart() {
 
 
 public void LoadSounds(bool register_commands) {
-    char query[] = "SELECT id, cmd, path, xp, kic, volume, cost, rate_points FROM pro_sounds WHERE enabled = 1 ORDER BY path";
+    char query[] = "SELECT id, cmd, path, xp, kic, volume, cost, rate_points, register_cmd FROM pro_sounds WHERE enabled = 1 ORDER BY path";
     SoundDB.Query(CallbackLoadSounds, query, register_commands);
 }
 
@@ -267,6 +269,7 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
         cur_sound.volume = result.FetchFloat(5);
         cur_sound.cost = result.FetchInt(6);
         cur_sound.rate_points = result.FetchInt(7);
+        cur_sound.register_cmd = result.FetchInt(8) != 0;
         
         if(!PrecacheSound(cur_sound.sound, true)) {
             LogAction(-1, -1, "Failed to prefetch sound %s: %s", cur_sound.command, cur_sound.sound);
@@ -278,7 +281,7 @@ public void CallbackLoadSounds(Database db, DBResultSet result, const char[] err
         sound_list.PushString(cur_sound.command);
         
         // if register_commands is true register a command for each sound - only registers the command if the command does not already exist
-        if(register_commands) {
+        if(register_commands && cur_sound.register_cmd) {
             Format(cmd, sizeof(cmd), "sm_%s", cur_sound.command);
             if(!CommandExists(cmd))
                 RegConsoleCmd(cmd, SoundCommand);
