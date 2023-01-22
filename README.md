@@ -1,6 +1,6 @@
 # ProSound
 
-A Sourcemod plugin to play sound clips without users having to download the sounds when joining the server.
+A Sourcemod plugin to play sound clips without users having to download the sounds when joining the server.  Supports ratelimiting.
 
 ## Features
 
